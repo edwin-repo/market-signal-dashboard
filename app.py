@@ -429,6 +429,9 @@ def macro_factor_row(key, fired, label, detail, info):
     icon   = "✅" if fired else "❌"
     status = info['bullish'] if fired else info['bearish']
 
+    status_color = '#3fb950' if fired else '#f85149'
+    detail_html  = f'<div style="font-size:0.75em; color:#8b949e; margin-top:2px">{detail}</div>' if detail else ''
+
     st.markdown(f"""
     <div style="background:{bg}; border:1px solid {border}; border-radius:8px;
                 padding:12px 16px; margin-bottom:8px; display:flex; align-items:flex-start; gap:12px">
@@ -436,10 +439,10 @@ def macro_factor_row(key, fired, label, detail, info):
         <div style="flex:1">
             <div style="font-weight:bold; font-size:0.9em">{info['full']}</div>
             <div style="font-size:0.8em; color:#8b949e; margin-top:2px">{info['why']}</div>
-            <div style="font-size:0.78em; color:{'#3fb950' if fired else '#f85149'}; margin-top:4px">
-                → {status}
+            <div style="font-size:0.78em; color:{status_color}; margin-top:4px">
+                &rarr; {status}
             </div>
-            {f'<div style="font-size:0.75em; color:#8b949e; margin-top:2px">{detail}</div>' if detail else ''}
+            {detail_html}
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -552,23 +555,31 @@ Fear & Greed < 25 and Insider Cluster ≥ 3 add conviction but aren't required.
         banners.get((conf, False), ("😴", "#111", "#30363d", "NO SIGNAL — Market not at extreme", "0/3 signals firing"))
     )
 
+    # Pre-compute display values to avoid nested f-strings breaking Streamlit's HTML parser
+    conf_color  = '#3fb950' if conf >= 2 else '#f85149'
+    macro_color = '#3fb950' if macro_ok else '#f85149'
+    vix_color   = '#f85149' if sig['vix_fired'] else '#8b949e'
+    vix_val     = f"{sig['vix']:.1f}" if sig['vix'] else 'N/A'
+    vix_emoji   = '🔥' if sig['vix_extreme'] else ('⚡' if sig['vix_high'] else '')
+    naaim_color = '#f85149' if sig['naaim_fired'] else '#8b949e'
+    naaim_val   = f"{sig['naaim']:.0f}" if sig['naaim'] else 'N/A'
+
     st.markdown(f"""
     <div style="background:{bg}; border:2px solid {border}; border-radius:12px; padding:20px 24px; margin-bottom:8px">
         <div style="font-size:1.5em; font-weight:bold">{icon} {title_text}</div>
         <div style="color:#8b949e; margin-top:6px; font-size:0.9em">{sub_text}</div>
         <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap">
             <span style="background:#21262d; border-radius:6px; padding:5px 12px; font-size:0.85em">
-                Confluence: <b style="color:{'#3fb950' if conf >= 2 else '#f85149'}">{conf}/3</b>
+                Confluence: <b style="color:{conf_color}">{conf}/3</b>
             </span>
             <span style="background:#21262d; border-radius:6px; padding:5px 12px; font-size:0.85em">
-                Macro Gate: <b style="color:{'#3fb950' if macro_ok else '#f85149'}">{macro}/6</b>
+                Macro Gate: <b style="color:{macro_color}">{macro}/6</b>
             </span>
             <span style="background:#21262d; border-radius:6px; padding:5px 12px; font-size:0.85em">
-                VIX: <b style="color:{'#f85149' if sig['vix_fired'] else '#8b949e'}">{f"{sig['vix']:.1f}" if sig['vix'] else '—'}</b>
-                {'🔥' if sig['vix_extreme'] else '⚡' if sig['vix_high'] else ''}
+                VIX: <b style="color:{vix_color}">{vix_val}</b> {vix_emoji}
             </span>
             <span style="background:#21262d; border-radius:6px; padding:5px 12px; font-size:0.85em">
-                NAAIM: <b style="color:{'#f85149' if sig['naaim_fired'] else '#8b949e'}">{f"{sig['naaim']:.0f}" if sig['naaim'] else '—'}</b>
+                NAAIM: <b style="color:{naaim_color}">{naaim_val}</b>
             </span>
         </div>
     </div>
