@@ -202,22 +202,51 @@ def fetch_fred_data():
             result[key] = df
     return result
 
-@st.cache_data(ttl=86400)
+@st.cache_data(ttl=86400)  # 24h cache — AAII publishes Thursdays
 def load_aaii():
+    """Load from bundled CSV (AAII blocks scrapers). Update CSV manually each Thursday."""
     path = DATA_DIR / 'aaii.csv'
     if path.exists():
         df = pd.read_csv(path, parse_dates=['date'])
         df = df.dropna(subset=['bullish', 'bull_bear_spread']).sort_values('date')
-        return df.iloc[-1]
+        row = df.iloc[-1].copy()
+        row['source'] = 'csv'
+        return row
     return None
 
-@st.cache_data(ttl=86400)
+@st.cache_data(ttl=43200)  # 12h cache — NAAIM publishes Wednesdays
 def load_naaim():
+    """Try live scrape from naaim.org first, fall back to bundled CSV."""
+    try:
+        r = requests.get(
+            'https://www.naaim.org/resources/naaim-exposure-index/',
+            headers={'User-Agent': 'Mozilla/5.0'}, timeout=10
+        )
+        if r.status_code == 200:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(r.text, 'html.parser')
+            tables = soup.find_all('table')
+            if tables:
+                rows = tables[0].find_all('tr')
+                for row in rows[1:]:  # skip header
+                    cells = [td.text.strip() for td in row.find_all(['td', 'th'])]
+                    if len(cells) >= 2 and cells[0] and cells[1]:
+                        try:
+                            date = pd.to_datetime(cells[0], format='%m/%d/%Y')
+                            naaim_val = float(cells[1])
+                            return pd.Series({'date': date, 'naaim': naaim_val, 'source': 'live'})
+                        except (ValueError, TypeError):
+                            continue
+    except Exception:
+        pass
+    # Fallback: bundled CSV
     path = DATA_DIR / 'naaim.csv'
     if path.exists():
         df = pd.read_csv(path, parse_dates=['date'])
         df = df.dropna(subset=['naaim']).sort_values('date')
-        return df.iloc[-1]
+        row = df.iloc[-1].copy()
+        row['source'] = 'csv'
+        return row
     return None
 
 @st.cache_data(ttl=3600)
@@ -291,8 +320,9 @@ def compute_signals(market, fred, aaii_row, naaim_row, aaii_override, naaim_over
         sig['naaim'] = naaim_override
         sig['naaim_date'] = 'Manual override'
     elif naaim_row is not None:
-        sig['naaim']      = float(naaim_row['naaim'])
-        sig['naaim_date'] = str(naaim_row['date'])[:10]
+        sig['naaim']        = float(naaim_row['naaim'])
+        sig['naaim_date']   = str(naaim_row['date'])[:10]
+        sig['naaim_source'] = str(naaim_row.get('source', 'csv'))
     else:
         sig['naaim'] = None
         sig['naaim_date'] = 'No data'
@@ -489,8 +519,6 @@ def main():
         fred      = fetch_fred_data()
         aaii_row  = load_aaii()
         naaim_row = load_naaim()
-        fg_score, fg_rating = fetch_fear_greed()
-
     sig = compute_signals(market, fred, aaii_row, naaim_row, aaii_override, naaim_override)
 
     # ── Header ────────────────────────────────────────────────────────────
@@ -599,18 +627,19 @@ Fear & Greed < 25 and Insider Cluster ≥ 3 add conviction but aren't required.
     big_signal_card(c1, "aaii", "AAII Bull-Bear Spread", aaii_disp,
                     "threshold: Spread < -20%", sig['aaii_fired'],
                     SIGNAL_INFO['aaii'],
-                    note=f"as of {sig['aaii_date']} · {aaii_sub}",
-                    sub_stats="📊 Spread < -20%: 86% win @12m, avg +18.9%")
+                    note=f"📁 csv · last updated {sig['aaii_date']} · {aaii_sub}",
+                    sub_stats="📊 Spread < -20%: 86% win @12m, avg +18.9% · Updates Thursdays")
 
     naaim_val  = sig.get('naaim')
     naaim_disp = f"{naaim_val:.1f}" if naaim_val is not None else "No data"
     naaim_sub  = ("🔴 Extreme — managers nearly flat/short" if naaim_val and naaim_val < 25
                   else "🟠 Heavily underweight" if naaim_val and naaim_val < 40
                   else "⚪ Normal allocation" if naaim_val else "")
+    naaim_src_icon = "🟢 live" if sig.get('naaim_source') == 'live' else "📁 csv"
     big_signal_card(c2, "naaim", "NAAIM Exposure Index", naaim_disp,
                     "threshold: < 40 | extreme: < 25",
                     sig['naaim_fired'], SIGNAL_INFO['naaim'],
-                    note=f"as of {sig['naaim_date']} · {naaim_sub}",
+                    note=f"{naaim_src_icon} · as of {sig['naaim_date']} · {naaim_sub}",
                     sub_stats="📊 <40: 98% win @12m · <25: 100% win @12m")
 
     vix_val  = sig.get('vix')
@@ -660,7 +689,8 @@ The gate reduces signal frequency by 6x but nearly eliminates losing trades.
 
         cop_now = sig.get('copper_now')
         cop_roc = sig.get('copper_roc')
-        detail  = f"Current: ${cop_now:.3f}/lb · 20d change: {'↑' if cop_roc and cop_roc > 0 else '↓'}{abs(cop_roc):.3f}" if cop_now else "No data"
+        cop_dir = '↑ rising' if cop_roc and cop_roc > 0 else '↓ falling'
+        detail  = f"${cop_now:.3f}/lb · 20d ROC: {cop_dir} ({cop_roc:+.3f})" if cop_now else "No data"
         macro_factor_row("macro_copper",  sig['macro_copper'], "macro_copper", detail, MACRO_INFO['macro_copper'])
 
     with m2:
@@ -683,46 +713,7 @@ The gate reduces signal frequency by 6x but nearly eliminates losing trades.
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Section 3: Standalone ─────────────────────────────────────────────
-    st.subheader("📌 Standalone Confirmation Signals")
-    st.caption("Not part of the confluence score — use as bonus conviction when confluence ≥ 2")
-
-    s1, s2 = st.columns(2)
-    fg_fired = to_bool(fg_score is not None and fg_score < FG_THRESHOLD)
-    fg_str   = f"{fg_score:.0f} — {fg_rating.title()}" if fg_score else "Unavailable"
-    big_signal_card(s1, "fg", "CNN Fear & Greed Index", fg_str,
-                    "threshold: < 25 (Extreme Fear)", fg_fired,
-                    SIGNAL_INFO['fg'], note="Live daily · 0 = Extreme Fear, 100 = Extreme Greed",
-                    sub_stats="📊 <25: 96% win @3m (limited history)")
-
-    with s2:
-        st.markdown("""
-        <div style="background:#1a0f0f; border:2px solid #30363d; border-radius:10px; padding:18px; height:100%">
-            <div style="font-size:0.8em; color:#8b949e; text-transform:uppercase; letter-spacing:1px">Insider Cluster</div>
-            <div style="font-size:1.5em; font-weight:bold; margin:4px 0; color:#8b949e">Manual Check</div>
-            <div style="font-size:0.75em; color:#8b949e">threshold: ≥ 3 companies buying in 10 days</div>
-            <div style="margin-top:10px; font-size:0.8em; color:#d29922">
-                📊 Cluster ≥ 3: 63–67% win rate (short-term; longer-term data limited)
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        with st.expander("ℹ️ About Insider Cluster"):
-            st.markdown("""
-**What it measures:** When 3+ different company executives/directors buy their own stock within 10 days — "cluster buying" is a strong signal that insiders believe their stock is cheap.
-
-**Why it matters:** Corporate insiders know their business best. When multiple insiders across different companies buy simultaneously, it suggests broad insider confidence at these prices.
-
-**Where to check:** [openinsider.com](https://openinsider.com) → filter by "Cluster Buys" or look for multiple CEO/CFO purchases on the same day.
-
-**What to look for:**
-- Multiple different companies (not the same company)
-- Officers (CEO, CFO, COO) > Directors (stronger signal)
-- Larger $ amounts = stronger conviction
-            """)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # ── Section 4: Backtest Reference ─────────────────────────────────────
+    # ── Section 3: Backtest Reference ─────────────────────────────────────
     with st.expander("📋 Full Backtest Reference Table (2010–2026)"):
         st.markdown("""
 | Signal | N signals | 1m WR | 3m WR | 3m Avg | 6m WR | 12m WR | 12m Avg |
