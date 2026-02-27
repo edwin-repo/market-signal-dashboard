@@ -30,7 +30,7 @@ VIX_EXTREME           = 50
 FG_THRESHOLD          = 25
 MACRO_GATE_MIN        = 4
 ROC_DAYS              = 20
-DATA_DIR = Path(__file__).parent.parent / 'backtest' / 'data'
+DATA_DIR = Path(__file__).parent / 'data'
 
 # ── FRED Key ─────────────────────────────────────────────────────────────
 try:
