@@ -17,3 +17,17 @@ Thumbs.db
 ../backtest/data/
 ../backtest/results/
 ../backtest/charts/
+
+# CFTC raw downloads (huge — auto-fetched by COT scripts)
+data/cot_raw_*.csv
+data/cot_legacy_combined.csv
+data/tff_raw_*.csv
+
+# Auto-generated caches (rebuild from source)
+data/sentiment_cache.json
+
+# Streamlit cache dirs
+.streamlit/cache/
+
+# .claude local state
+.claude/

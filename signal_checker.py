@@ -25,6 +25,8 @@ VIX_EXTREME           = 50
 FG_THRESHOLD          = 25
 MACRO_GATE_MIN        = 4
 ROC_DAYS              = 20
+PC_10D_THRESHOLD      = 0.70
+PC_30D_THRESHOLD      = 0.65
 
 FRED_KEY       = os.environ.get("FRED_API_KEY", "")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -140,6 +142,39 @@ def run_check():
     fg_score = fetch_fg()
     fg_fired = fg_score is not None and fg_score < FG_THRESHOLD
 
+    # ── Meisler: Put/Call ratio ─────────────────────────────────────────
+    pc_10d_ma = None
+    pc_30d_ma = None
+    pc_10d_fired = False
+    pc_30d_fired = False
+    try:
+        pc_path = Path(__file__).parent / 'data' / 'putcall.csv'
+        if pc_path.exists():
+            pc_df = pd.read_csv(pc_path, parse_dates=['date']).sort_values('date')
+            pc_df['pc_10d_ma'] = pc_df['equity_pc_ratio'].rolling(10, min_periods=8).mean()
+            pc_df['pc_30d_ma'] = pc_df['equity_pc_ratio'].rolling(30, min_periods=25).mean()
+            if not pc_df.empty:
+                pc_10d_ma = float(pc_df['pc_10d_ma'].iloc[-1])
+                pc_30d_ma = float(pc_df['pc_30d_ma'].iloc[-1])
+                pc_10d_fired = pc_10d_ma > PC_10D_THRESHOLD
+                pc_30d_fired = pc_30d_ma > PC_30D_THRESHOLD
+    except Exception:
+        pass
+
+    # ── Meisler: AAII Bulls < 25% ─────────────────────────────────────
+    aaii_bulls_low = False
+    try:
+        aaii_path = Path(__file__).parent / 'data' / 'aaii.csv'
+        if aaii_path.exists():
+            aaii_df = pd.read_csv(aaii_path, parse_dates=['date']).dropna(subset=['bullish']).sort_values('date')
+            if not aaii_df.empty:
+                last_bulls = float(aaii_df['bullish'].iloc[-1])
+                if last_bulls <= 1.0:
+                    last_bulls *= 100
+                aaii_bulls_low = last_bulls < 25
+    except Exception:
+        pass
+
     # ── Determine if alert needed ─────────────────────────────────────────
     # Alert when: confluence ≥ 2, or VIX extreme, or any extreme individual reading
     should_alert = (
@@ -147,7 +182,9 @@ def run_check():
         vix_extreme or
         (naaim_val is not None and naaim_val < 25) or
         (aaii_spread is not None and aaii_spread < -0.30) or
-        fg_fired
+        fg_fired or
+        (pc_10d_fired and pc_30d_fired) or
+        aaii_bulls_low
     )
 
     # Build message
@@ -190,6 +227,11 @@ def run_check():
 
 📌 *STANDALONE*
 Fear & Greed: {na(fg_score)} {"🔴 EXTREME FEAR" if fg_fired else ""}
+
+🎯 *MEISLER SENTIMENT*
+{tick(pc_10d_fired)} Put/Call 10d MA: {na(pc_10d_ma, "{:.3f}")} · threshold > {PC_10D_THRESHOLD}
+{tick(pc_30d_fired)} Put/Call 30d MA: {na(pc_30d_ma, "{:.3f}")} · threshold > {PC_30D_THRESHOLD}
+{tick(aaii_bulls_low)} AAII Bulls < 25%: {"🟢 YES" if aaii_bulls_low else "🔴 NO"}
 
 📅 {datetime.now().strftime("%Y-%m-%d %H:%M")} Bangkok time
     """.strip()
